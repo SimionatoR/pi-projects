@@ -1,8 +1,11 @@
+import sys
 import dbus
 import time
 import dbus.mainloop.glib
 from gi.repository import GLib
 import RPi.GPIO as GPIO
+
+from screen_handler import display_song_info_on_lcd, display_show_message
 
 '''
 --------------------------------------------
@@ -18,6 +21,10 @@ def get_bluetooth_player_path():
         # Access the object manager to get all Bluetooth devices
         manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
         objects = manager.GetManagedObjects()
+
+        if objects is None:
+            print("Warning: No objects found in D-Bus.")
+            return None
 
         # Iterate over all objects and find a media player
         for path, interfaces in objects.items():
@@ -56,6 +63,10 @@ def get_bluetooth_metadata(player_path):
 # Function to get the current playback status (Playing, Paused, etc.)
 def get_playback_status(player_path):
     try:
+        if player_path is None:
+            print("Error: player_path is None")
+            return None
+
         bus = dbus.SystemBus()
         player = bus.get_object("org.bluez", player_path)
         iface = dbus.Interface(player, "org.freedesktop.DBus.Properties")
@@ -70,17 +81,24 @@ def get_playback_status(player_path):
 
 # Function to handle property changes from the Bluetooth media player
 def properties_changed(interface, changed, invalidated, path=None):
+    if changed is None:
+        print("Warning: 'changed' argument is None")
+        return
+    
     # Check if the changed properties include the 'Track' property
     #print("Properties changed")
     if 'Track' in changed:
         metadata = changed['Track']
-        
+
         # Extract and print song details
         title = metadata.get('Title', 'Unknown Title')
         artist = metadata.get('Artist', 'Unknown Artist')
         album = metadata.get('Album', 'Unknown Album')
-
+        display_song_info_on_lcd(title, artist)
         print(f"Now playing: Title: {title}, Artist: {artist}, Album: {album}\n")
+    else:
+        print("No track changes")
+    sys.stdout.flush()
 '''
 ---------- SONG DATA FETCHING END ----------
 '''  
@@ -101,8 +119,8 @@ def send_media_command(command):
     try:
         bus = dbus.SystemBus()
         player_path = get_bluetooth_player_path()
-        if not player_path:
-            print("No media player available.")
+        if not player_path or player_path is None:
+            print("Error: No media player available.")
             return
 
         player = bus.get_object("org.bluez", player_path)
@@ -162,12 +180,28 @@ def setup_gpio():
 
 
 def main():
+    display_show_message("SpotiPi started")
     # Initialize the main loop for D-Bus signal handling
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
     # Set up GPIO Buttons
-    setup_gpio()
+    #setup_gpio()
 
+    print("Waiting for Bluetooth connection...")
+
+    found_player_path = False
+
+    while not found_player_path:
+        player_path = get_bluetooth_player_path()
+        if player_path is None:
+            display_show_message("Waiting media player")
+            print("No media player found, retrying in 5 seconds")
+            time.sleep(5) # Wait 5 seconds before restarting loop
+        else:
+            found_player_path = True
+
+
+    print("-------------------- test ---------------------")
     # Get media player path
     player_path = get_bluetooth_player_path()
     if not player_path:
@@ -195,10 +229,19 @@ def main():
 
     except Exception as e:
         print(f"Error setting up signal listener: {e}")
+        display_show_message("Error: listener setting")
     
     finally:
         GPIO.cleanup()  # Clean up GPIO on exit
 
 
 if __name__ == "__main__":
-    main()
+    while True: # If an error occours the script restarts in 5 seconds
+        try:
+            main()
+        except Exception as e:
+            print(f"Error in main loop: {e}")
+            print("Restarting the script in 5 seconds...")
+            display_show_message("Restarting...")
+            sys.stdout.flush()
+            time.sleep(5)
